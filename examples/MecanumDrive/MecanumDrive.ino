@@ -19,8 +19,12 @@
 
 #include <WUD_Tournaments.h>
 
-// Web gửi hướng joystick: x, y = ±100 khi đẩy thẳng một phía, số nhỏ hơn khi đẩy hơi lệch.
-// Thành phần nhỏ hơn mức này coi như 0 (đẩy hơi lệch vẫn đi thẳng, không bị trôi ngang).
+// Tốc độ trong mọi lệnh chạy bên dưới: 100 % = đúng PWM của mức Chậm / Vừa / Nhanh đang chọn trên web
+// (140 / 200 / 255). Không lấy tốc độ từ joystick -> kéo nhẹ hay mạnh, lệch ít hay nhiều đều như nhau.
+const int FULL = 100;
+
+// Web chia joystick thành 8 hướng: x, y chỉ là 0 hoặc ±100.
+// Số nhỏ hơn mức này coi như 0 (phòng khi dùng web bản cũ còn gửi số lẻ).
 const int DEADZONE = 15;
 
 void setup() {
@@ -39,9 +43,11 @@ void setup() {
 
   Car.onConnect([]() { Serial.println("Tay cam da ket noi!"); });
 
-  // Bật Bluetooth. LED tự chớp. Car.begin(0) = không in dữ liệu nhận ra Serial.
+  // Bật Bluetooth. LED tự chớp.
+  // DebugMode = 0: thư viện KHÔNG in dữ liệu nhận ([CMD], [BTN]); Serial chỉ còn dòng "Trang thai: ..."
+  // của ví dụ này cho dễ đọc. Muốn xem dữ liệu thô từ web thì đổi thành Car.begin(1).
   // begin() trả false nếu khai báo sai (ví dụ có bánh có chân PWM, có bánh không) -> xem dòng lỗi phía trên.
-  if (!Car.begin()) {
+  if (!Car.begin(0)) {
     Serial.println("Khoi dong that bai, sua code theo dong loi o tren roi nap lai.");
     return;
   }
@@ -50,30 +56,42 @@ void setup() {
   }
 }
 
+// In trạng thái di chuyển ra Serial. Chỉ in khi trạng thái ĐỔI
+// (loop() chạy hàng nghìn lần mỗi giây, in mỗi vòng sẽ tràn Serial Monitor).
+void printState(const char* state) {
+  static const char* lastState = "";   // trạng thái đã in lần trước (static: giữ giữa các vòng loop)
+  if (strcmp(state, lastState) == 0) return;   // giống lần trước -> không in
+  lastState = state;
+  Serial.print("Trang thai: ");
+  Serial.println(state);
+}
+
 // Lái xe theo joystick và nút quẹo.
 // Car.x(), Car.y() nằm trong khoảng -100..100:
 //   y > 0: đẩy lên,  y < 0: đẩy xuống
 //   x > 0: đẩy phải, x < 0: đẩy trái
-// Web chỉ gửi HƯỚNG: đẩy hẳn về một phía thì số đó = ±100, đẩy nhẹ hay hết cỡ như nhau.
-// Tốc độ thật do mức Chậm / Vừa / Nhanh trên web quyết định (PWM 140 / 200 / 255):
-// tốc độ 100 % = đúng PWM của mức đang chọn.
+// Web chia joystick thành 8 hướng nên x, y chỉ là 0 hoặc ±100: joystick chỉ dùng để chọn HƯỚNG.
+// Tốc độ luôn là FULL (= PWM của mức Chậm / Vừa / Nhanh đang chọn), không phụ thuộc độ kéo.
 void driveMecanum() {
   // Bước 1: mất kết nối hoặc mất tín hiệu -> dừng xe, không làm gì thêm.
   if (!Car.isConnected() || Car.isFailsafe()) {
     Car.stop();
+    printState("DUNG (mat ket noi / mat tin hieu)");
     return;
   }
 
   // Bước 2: đang giữ nút quẹo -> xoay tại chỗ (ưu tiên hơn joystick).
-  // turnSpeed = 100 (mặc định, web cũng gửi 100) -> xoay bằng đúng PWM của mức đang chọn.
+  // turnSpeed = 100 (mặc định, web cũng gửi 100) -> xoay bằng đúng PWM của mức đang chọn, giống FULL.
   int turnSpeed = Car.config().turnSpeed;
 
   if (Car.TURN_LEFT.isPressed()) {
     Car.turnLeft(turnSpeed);
+    printState("XOAY TRAI (nut QUEO TRAI)");
     return;
   }
   if (Car.TURN_RIGHT.isPressed()) {
     Car.turnRight(turnSpeed);
+    printState("XOAY PHAI (nut QUEO PHAI)");
     return;
   }
 
@@ -89,30 +107,62 @@ void driveMecanum() {
 
   // Bước 5: chọn cách chạy. Kiểm tra hướng chéo trước, rồi mới tới hướng thẳng.
   if (pushUp && pushRight) {
-    Car.drive(x, y, 0);      // đi chéo lên bên phải
+    Car.drive(FULL, FULL, 0);    // đi chéo lên bên phải
+    printState("CHEO LEN PHAI");
   } else if (pushUp && pushLeft) {
-    Car.drive(x, y, 0);      // đi chéo lên bên trái
+    Car.drive(-FULL, FULL, 0);   // đi chéo lên bên trái
+    printState("CHEO LEN TRAI");
   } else if (pushDown && pushRight) {
-    Car.drive(x, y, 0);      // đi chéo xuống bên phải
+    Car.drive(FULL, -FULL, 0);   // đi chéo xuống bên phải
+    printState("CHEO XUONG PHAI");
   } else if (pushDown && pushLeft) {
-    Car.drive(x, y, 0);      // đi chéo xuống bên trái
+    Car.drive(-FULL, -FULL, 0);  // đi chéo xuống bên trái
+    printState("CHEO XUONG TRAI");
   } else if (pushUp) {
-    Car.forward(y);          // tiến thẳng; y = 100 -> chạy đúng PWM của mức đang chọn
+    Car.forward(FULL);       // tiến thẳng
+    printState("TIEN");
   } else if (pushDown) {
-    Car.backward(-y);        // lùi thẳng (y âm nên đổi dấu thành số dương)
+    Car.backward(FULL);      // lùi thẳng
+    printState("LUI");
   } else if (pushRight) {
-    Car.goRight(x);          // đi ngang sang phải
+    Car.goRight(FULL);       // đi ngang sang phải
+    printState("SANG PHAI");
   } else if (pushLeft) {
-    Car.goLeft(-x);          // đi ngang sang trái (x âm nên đổi dấu)
+    Car.goLeft(FULL);        // đi ngang sang trái
+    printState("SANG TRAI");
   } else {
     Car.stop();              // joystick ở giữa -> đứng yên
+    printState("DUNG YEN");
+  }
+}
+
+// In ra Serial mỗi khi đổi mức tốc độ trên web.
+// Chỉ để xem: thư viện đã TỰ áp dụng PWM mới cho cả 4 bánh trong Car.update(),
+// các lệnh Car.forward(), Car.goLeft(), Car.turnRight()... ở trên chạy theo PWM mới mà không cần sửa gì.
+void showSpeedLevel() {
+  static uint8_t lastPwm = 0;          // PWM đã in lần trước (static: giữ giá trị giữa các vòng loop)
+  if (!Car.isConnected()) {
+    lastPwm = 0;                       // kết nối lại thì in lại mức đang chọn
+    return;
+  }
+  uint8_t pwm = Car.speedPwm();        // 140 / 200 / 255 = Chậm / Vừa / Nhanh
+  if (pwm == lastPwm) return;          // không đổi -> không in
+  lastPwm = pwm;
+
+  if (pwm == 140) {
+    Serial.println("Muc toc do: CHAM (PWM 140)");
+  } else if (pwm == 200) {
+    Serial.println("Muc toc do: VUA (PWM 200)");
+  } else if (pwm == 255) {
+    Serial.println("Muc toc do: NHANH (PWM 255)");
+  } else {
+    // Số khác: "Giới hạn tốc độ tối đa" trên web đang chặn thấp hơn mức đã chọn.
+    Serial.printf("Muc toc do: PWM %u (bi chan boi Gioi han toc do toi da)\n", pwm);
   }
 }
 
 void loop() {
   Car.update();          // bắt buộc gọi đầu mỗi vòng loop(): nhận dữ liệu mới từ web
   driveMecanum();        // lái xe theo dữ liệu vừa nhận
-
-  // Cần biết mức tốc độ đang chọn trên web (140 / 200 / 255) thì đọc:
-  //   uint8_t pwm = Car.speedPwm();
+  showSpeedLevel();      // báo khi đổi Chậm / Vừa / Nhanh trên web
 }

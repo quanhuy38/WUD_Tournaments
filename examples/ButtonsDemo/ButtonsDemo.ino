@@ -13,16 +13,17 @@ void setup() {
 
   Car.setName("AA11");   // tên Bluetooth: RC-Car-AA11
   // LED tự chớp: nháy chậm = chờ, sáng = đã kết nối, nháy nhanh = failsafe.
-  // DebugMode (không bắt buộc): 1 = in dữ liệu tay cầm gửi tới ra Serial (mặc định); 0 = không in.
-  Car.begin(1);
+  // DebugMode = 0: thư viện không tự in [CMD] / [BTN]; ví dụ này tự in bên dưới cho dễ đọc.
+  // Muốn xem thêm dữ liệu thô của thư viện thì đổi thành Car.begin(1).
+  Car.begin(0);
 }
 
 void loop() {
   Car.update();          // bắt buộc gọi đầu mỗi vòng loop()
 
   // Chỉ in khi tín hiệu thay đổi.
-  // x, y là HƯỚNG joystick: ±100 khi đẩy thẳng một phía (đẩy nhẹ hay hết cỡ như nhau).
-  if (Car.debugMode() && Car.hasChanged()) {
+  // x, y là HƯỚNG joystick (8 hướng): chỉ là 0 hoặc ±100, đẩy nhẹ hay hết cỡ như nhau.
+  if (Car.hasChanged()) {
     WUD_Signal s = Car.signal();
     Serial.printf("x=%4d  y=%4d  nut=0x%02X\n", s.x, s.y, s.flags);
   }

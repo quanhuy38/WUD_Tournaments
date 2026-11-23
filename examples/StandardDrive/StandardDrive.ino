@@ -1,7 +1,7 @@
 // StandardDrive — xe 4 bánh thường (2 module L298N), lái bằng joystick trên web.
 //   Đẩy joystick LÊN / XUỐNG  = tiến / lùi
 //   Đẩy joystick PHẢI / TRÁI  = xoay phải / xoay trái tại chỗ
-//   Đẩy chéo                  = vừa chạy vừa rẽ
+//   Chỉ có 4 hướng, không có hướng chéo (web tự chọn hướng gần nhất).
 //   Nút Chậm / Vừa / Nhanh    = PWM 140 / 200 / 255 (joystick chỉ chọn hướng, không chỉnh tốc độ)
 //
 // Yêu cầu: thư viện WUD_Tournaments 0.3.0 trở lên.
@@ -22,8 +22,12 @@
 
 #include <WUD_Tournaments.h>
 
-// Web gửi hướng joystick: x, y = ±100 khi đẩy thẳng một phía, số nhỏ hơn khi đẩy hơi lệch.
-// Thành phần nhỏ hơn mức này coi như 0 (đẩy hơi lệch vẫn đi thẳng, không bị rẽ nhẹ).
+// Tốc độ trong mọi lệnh chạy bên dưới: 100 % = đúng PWM của mức Chậm / Vừa / Nhanh đang chọn trên web
+// (140 / 200 / 255). Không lấy tốc độ từ joystick -> kéo nhẹ hay mạnh, lệch ít hay nhiều đều như nhau.
+const int FULL = 100;
+
+// Xe Standard: web chia joystick thành 4 hướng, chỉ gửi x HOẶC y (số kia = 0), mỗi số là 0 hoặc ±100.
+// Số nhỏ hơn mức này coi như 0 (phòng khi dùng web bản cũ còn gửi số lẻ).
 const int DEADZONE = 15;
 
 void setup() {
@@ -40,9 +44,11 @@ void setup() {
 
   Car.setDriveType(WUD_STD);       // xe 4 bánh thường
 
-  // Bật Bluetooth. LED tự chớp. Car.begin(0) = không in dữ liệu nhận ra Serial.
+  // Bật Bluetooth. LED tự chớp.
+  // DebugMode = 0: thư viện KHÔNG in dữ liệu nhận ([CMD], [BTN]); Serial chỉ còn dòng "Trang thai: ..."
+  // của ví dụ này cho dễ đọc. Muốn xem dữ liệu thô từ web thì đổi thành Car.begin(1).
   // begin() trả false nếu khai báo sai (ví dụ có bánh có chân PWM, có bánh không) -> xem dòng lỗi phía trên.
-  if (!Car.begin()) {
+  if (!Car.begin(0)) {
     Serial.println("Khoi dong that bai, sua code theo dong loi o tren roi nap lai.");
     return;
   }
@@ -51,17 +57,28 @@ void setup() {
   }
 }
 
+// In trạng thái di chuyển ra Serial. Chỉ in khi trạng thái ĐỔI
+// (loop() chạy hàng nghìn lần mỗi giây, in mỗi vòng sẽ tràn Serial Monitor).
+void printState(const char* state) {
+  static const char* lastState = "";   // trạng thái đã in lần trước (static: giữ giữa các vòng loop)
+  if (strcmp(state, lastState) == 0) return;   // giống lần trước -> không in
+  lastState = state;
+  Serial.print("Trang thai: ");
+  Serial.println(state);
+}
+
 // Lái xe theo joystick.
 // Car.x(), Car.y() nằm trong khoảng -100..100:
 //   y > 0: đẩy lên,  y < 0: đẩy xuống
 //   x > 0: đẩy phải, x < 0: đẩy trái
-// Web chỉ gửi HƯỚNG: đẩy hẳn về một phía thì số đó = ±100, đẩy nhẹ hay hết cỡ như nhau.
-// Tốc độ thật do mức Chậm / Vừa / Nhanh trên web quyết định (PWM 140 / 200 / 255):
-// tốc độ 100 % = đúng PWM của mức đang chọn.
+// Web chia joystick thành 4 hướng (lên / xuống / trái / phải) nên x, y chỉ là 0 hoặc ±100:
+// joystick chỉ dùng để chọn HƯỚNG.
+// Tốc độ luôn là FULL (= PWM của mức Chậm / Vừa / Nhanh đang chọn), không phụ thuộc độ kéo.
 void driveStandard() {
   // Bước 1: mất kết nối hoặc mất tín hiệu -> dừng xe, không làm gì thêm.
   if (!Car.isConnected() || Car.isFailsafe()) {
     Car.stop();
+    printState("DUNG (mat ket noi / mat tin hieu)");
     return;
   }
 
@@ -75,36 +92,56 @@ void driveStandard() {
   bool pushRight = (x >  DEADZONE);
   bool pushLeft  = (x < -DEADZONE);
 
-  // Bước 4: chọn cách chạy. Kiểm tra hướng chéo trước, rồi mới tới hướng thẳng.
-  if (pushUp && pushRight) {
-    Car.drive(x, y, 0);      // vừa tiến vừa rẽ phải
-  } else if (pushUp && pushLeft) {
-    Car.drive(x, y, 0);      // vừa tiến vừa rẽ trái
-  } else if (pushDown && pushRight) {
-    Car.drive(x, y, 0);      // vừa lùi vừa rẽ phải
-  } else if (pushDown && pushLeft) {
-    Car.drive(x, y, 0);      // vừa lùi vừa rẽ trái
-  } else if (pushUp) {
-    Car.forward(y);          // tiến thẳng; y = 100 -> chạy đúng PWM của mức đang chọn
+  // Bước 4: chọn cách chạy (4 hướng, không có hướng chéo).
+  if (pushUp) {
+    Car.forward(FULL);       // tiến thẳng
+    printState("TIEN");
   } else if (pushDown) {
-    Car.backward(-y);        // lùi thẳng (y âm nên đổi dấu thành số dương)
+    Car.backward(FULL);      // lùi thẳng
+    printState("LUI");
   } else if (pushRight) {
-    Car.turnRight(x);        // xoay phải tại chỗ
+    Car.turnRight(FULL);     // xoay phải tại chỗ
+    printState("XOAY PHAI");
   } else if (pushLeft) {
-    Car.turnLeft(-x);        // xoay trái tại chỗ (x âm nên đổi dấu)
+    Car.turnLeft(FULL);      // xoay trái tại chỗ
+    printState("XOAY TRAI");
   } else {
     Car.stop();              // joystick ở giữa -> đứng yên
+    printState("DUNG YEN");
+  }
+}
+
+// In ra Serial mỗi khi đổi mức tốc độ trên web.
+// Chỉ để xem: thư viện đã TỰ áp dụng PWM mới cho cả 4 bánh trong Car.update(),
+// các lệnh Car.forward(), Car.drive()... ở trên chạy theo PWM mới mà không cần sửa gì.
+void showSpeedLevel() {
+  static uint8_t lastPwm = 0;          // PWM đã in lần trước (static: giữ giá trị giữa các vòng loop)
+  if (!Car.isConnected()) {
+    lastPwm = 0;                       // kết nối lại thì in lại mức đang chọn
+    return;
+  }
+  uint8_t pwm = Car.speedPwm();        // 140 / 200 / 255 = Chậm / Vừa / Nhanh
+  if (pwm == lastPwm) return;          // không đổi -> không in
+  lastPwm = pwm;
+
+  if (pwm == 140) {
+    Serial.println("Muc toc do: CHAM (PWM 140)");
+  } else if (pwm == 200) {
+    Serial.println("Muc toc do: VUA (PWM 200)");
+  } else if (pwm == 255) {
+    Serial.println("Muc toc do: NHANH (PWM 255)");
+  } else {
+    // Số khác: "Giới hạn tốc độ tối đa" trên web đang chặn thấp hơn mức đã chọn.
+    Serial.printf("Muc toc do: PWM %u (bi chan boi Gioi han toc do toi da)\n", pwm);
   }
 }
 
 void loop() {
   Car.update();          // bắt buộc gọi đầu mỗi vòng loop(): nhận dữ liệu mới từ web
   driveStandard();       // lái xe theo dữ liệu vừa nhận
+  showSpeedLevel();      // báo khi đổi Chậm / Vừa / Nhanh trên web
 
   if (Car.CROSS.wasPressed()) {
     // TODO: sút
   }
-
-  // Cần biết mức tốc độ đang chọn trên web (140 / 200 / 255) thì đọc:
-  //   uint8_t pwm = Car.speedPwm();
 }
